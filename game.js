@@ -5,8 +5,8 @@ const overlay = document.querySelector("#overlay");
 const hotbar = document.querySelector("#hotbar");
 const statusLine = document.querySelector("#status");
 
-const WORLD_SIZE = 28;
-const MAX_HEIGHT = 10;
+const WORLD_SIZE = 22;
+const MAX_HEIGHT = 8;
 const REACH = 7;
 const PLAYER_HEIGHT = 1.75;
 const PLAYER_RADIUS = 0.32;
@@ -28,22 +28,13 @@ scene.background = new THREE.Color(0x83c5ff);
 scene.fog = new THREE.Fog(0x83c5ff, 45, 92);
 
 const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.05, 140);
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
+renderer.setPixelRatio(1);
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = false;
 
 const sun = new THREE.DirectionalLight(0xfff0c4, 2.4);
 sun.position.set(18, 34, 14);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = -42;
-sun.shadow.camera.right = 42;
-sun.shadow.camera.top = 42;
-sun.shadow.camera.bottom = -42;
-sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 90;
 scene.add(sun);
 scene.add(new THREE.HemisphereLight(0xcfeaff, 0x476d3f, 1.55));
 
@@ -53,6 +44,7 @@ const pointer = new THREE.Vector2(0, 0);
 const tempVector = new THREE.Vector3();
 const tempBox = new THREE.Box3();
 const playerBox = new THREE.Box3();
+const matrix = new THREE.Matrix4();
 const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
 const world = new Map();
 const blockMeshes = new Map();
@@ -101,6 +93,21 @@ function createMaterial(block) {
 }
 
 const materials = blockTypes.map(createMaterial);
+const hoverMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.16,
+  depthWrite: false,
+});
+const typeMeshes = blockTypes.map((block, index) => {
+  const mesh = new THREE.InstancedMesh(blockGeometry, materials[index], WORLD_SIZE * WORLD_SIZE * (MAX_HEIGHT + 6));
+  mesh.count = 0;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.userData.typeIndex = index;
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return mesh;
+});
 
 function terrainHeight(x, z) {
   const rolling = Math.sin(x * 0.38) * 1.8 + Math.cos(z * 0.31) * 1.6;
@@ -118,75 +125,45 @@ function isBlockVisible(x, y, z) {
   return neighborOffsets.some(([offsetX, offsetY, offsetZ]) => !isOccupied(x + offsetX, y + offsetY, z + offsetZ));
 }
 
-function createBlockMesh(key, typeIndex) {
-  const [x, y, z] = unpackKey(key);
-
-  const mesh = new THREE.Mesh(blockGeometry, materials[typeIndex]);
-  mesh.position.set(x, y, z);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.userData.key = key;
-  mesh.userData.typeIndex = typeIndex;
-  blockMeshes.set(key, mesh);
-  targetMeshes.push(mesh);
-  scene.add(mesh);
-}
-
-function removeBlockMesh(key) {
-  const mesh = blockMeshes.get(key);
-  if (!mesh) return;
-  scene.remove(mesh);
-  blockMeshes.delete(key);
-  const index = targetMeshes.indexOf(mesh);
-  if (index !== -1) targetMeshes.splice(index, 1);
-}
-
-function updateBlockMesh(x, y, z) {
-  const key = blockKey(x, y, z);
-  const typeIndex = world.get(key);
-  if (typeIndex === undefined || !isBlockVisible(x, y, z)) {
-    removeBlockMesh(key);
-    return;
-  }
-
-  const mesh = blockMeshes.get(key);
-  if (mesh) {
-    mesh.material = materials[typeIndex];
-    mesh.userData.typeIndex = typeIndex;
-    return;
-  }
-
-  createBlockMesh(key, typeIndex);
-}
-
-function updateBlockAndNeighbors(x, y, z) {
-  updateBlockMesh(x, y, z);
-  neighborOffsets.forEach(([offsetX, offsetY, offsetZ]) => updateBlockMesh(x + offsetX, y + offsetY, z + offsetZ));
-}
-
 function rebuildVisibleMeshes() {
-  [...blockMeshes.keys()].forEach(removeBlockMesh);
-  for (const key of world.keys()) {
+  targetMeshes.length = 0;
+  blockMeshes.clear();
+  typeMeshes.forEach((mesh) => {
+    mesh.count = 0;
+  });
+
+  for (const [key, typeIndex] of world.entries()) {
     const [x, y, z] = unpackKey(key);
-    updateBlockMesh(x, y, z);
+    if (!isBlockVisible(x, y, z)) continue;
+    const mesh = typeMeshes[typeIndex];
+    matrix.makeTranslation(x, y, z);
+    mesh.setMatrixAt(mesh.count, matrix);
+    mesh.count += 1;
+    blockMeshes.set(key, { x, y, z, typeIndex });
+    targetMeshes.push({ x, y, z, typeIndex });
   }
+
+  typeMeshes.forEach((mesh) => {
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  });
 }
 
 function addBlock(x, y, z, typeIndex = 0) {
   const key = blockKey(x, y, z);
   if (world.has(key)) return;
   world.set(key, typeIndex);
-  updateBlockAndNeighbors(x, y, z);
+  rebuildVisibleMeshes();
 }
 
 function removeBlock(key) {
-  const [x, y, z] = unpackKey(key);
   world.delete(key);
-  updateBlockAndNeighbors(x, y, z);
+  rebuildVisibleMeshes();
 }
 
 function buildWorld() {
-  [...blockMeshes.keys()].forEach(removeBlockMesh);
+  blockMeshes.clear();
+  targetMeshes.length = 0;
   world.clear();
 
   for (let x = -WORLD_SIZE / 2; x < WORLD_SIZE / 2; x += 1) {
@@ -199,7 +176,7 @@ function buildWorld() {
     }
   }
 
-  for (let i = 0; i < 32; i += 1) {
+  for (let i = 0; i < 18; i += 1) {
     const x = Math.floor(Math.sin(i * 9.7) * 13);
     const z = Math.floor(Math.cos(i * 5.3) * 13);
     const y = terrainHeight(x, z) + 1;
@@ -219,12 +196,7 @@ function buildWorld() {
 }
 
 function createHighlight() {
-  const geometry = new THREE.BoxGeometry(1.04, 1.04, 1.04);
-  const edges = new THREE.EdgesGeometry(geometry);
-  highlight = new THREE.LineSegments(
-    edges,
-    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }),
-  );
+  highlight = new THREE.Mesh(new THREE.BoxGeometry(1.04, 1.04, 1.04), hoverMaterial);
   highlight.visible = false;
   scene.add(highlight);
 }
@@ -330,8 +302,40 @@ function updateMovement(delta) {
 
 function getTarget() {
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(targetMeshes, false);
-  return hits[0] ?? null;
+  let closestTarget = null;
+  let closestDistance = REACH;
+  const origin = raycaster.ray.origin;
+  const direction = raycaster.ray.direction;
+
+  for (const block of targetMeshes) {
+    tempBox.min.set(block.x - 0.5, block.y - 0.5, block.z - 0.5);
+    tempBox.max.set(block.x + 0.5, block.y + 0.5, block.z + 0.5);
+    const hitPoint = raycaster.ray.intersectBox(tempBox, tempVector);
+    if (!hitPoint) continue;
+    const distance = origin.distanceTo(hitPoint);
+    if (distance >= closestDistance) continue;
+
+    const localX = hitPoint.x - block.x;
+    const localY = hitPoint.y - block.y;
+    const localZ = hitPoint.z - block.z;
+    const absX = Math.abs(localX);
+    const absY = Math.abs(localY);
+    const absZ = Math.abs(localZ);
+    const normal = new THREE.Vector3(0, 0, 0);
+
+    if (absX >= absY && absX >= absZ) {
+      normal.x = Math.sign(localX || direction.x);
+    } else if (absY >= absX && absY >= absZ) {
+      normal.y = Math.sign(localY || direction.y);
+    } else {
+      normal.z = Math.sign(localZ || direction.z);
+    }
+
+    closestDistance = distance;
+    closestTarget = { block, normal };
+  }
+
+  return closestTarget;
 }
 
 function updateHighlight() {
@@ -341,26 +345,29 @@ function updateHighlight() {
     return;
   }
   highlight.visible = true;
-  highlight.position.copy(hit.object.position);
+  highlight.position.set(hit.block.x, hit.block.y, hit.block.z);
 }
 
 function breakTarget() {
   const hit = getTarget();
   if (!hit) return;
-  const [, y] = unpackKey(hit.object.userData.key);
+  const { x, y, z, typeIndex } = hit.block;
   if (y === 0) {
     setStatus("Bedrock layer stays put");
     return;
   }
-  removeBlock(hit.object.userData.key);
-  setStatus(`Broke ${blockTypes[hit.object.userData.typeIndex].name}`);
+  removeBlock(blockKey(x, y, z));
+  setStatus(`Broke ${blockTypes[typeIndex].name}`);
 }
 
 function placeTarget() {
   const hit = getTarget();
-  if (!hit || !hit.face) return;
-  const position = hit.object.position.clone().add(hit.face.normal);
-  position.round();
+  if (!hit) return;
+  const position = tempVector.set(
+    hit.block.x + hit.normal.x,
+    hit.block.y + hit.normal.y,
+    hit.block.z + hit.normal.z,
+  );
 
   tempBox.min.set(position.x - 0.49, position.y - 0.49, position.z - 0.49);
   tempBox.max.set(position.x + 0.49, position.y + 0.49, position.z + 0.49);
