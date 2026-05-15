@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lo Blockcraft</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="game">
+      <canvas id="world"></canvas>
+      <section id="overlay" aria-live="polite">
+        <h1>Lo Blockcraft</h1>
+        <p>Click to play. Build, dig, jump, and explore.</p>
+        <div class="controls">
+          <span>WASD move</span>
+          <span>Mouse look</span>
+          <span>Space jump</span>
+          <span>Left break</span>
+          <span>Right place</span>
+          <span>1-5 blocks</span>
+          <span>R reset</span>
+        </div>
+      </section>
+      <div id="crosshair" aria-hidden="true"></div>
+      <div id="hotbar" aria-label="Block hotbar"></div>
+      <div id="status" aria-live="polite">Click to start</div>
+    </main>
+
+    <script type="module" src="./game.js"></script>
+  </body>
+</html>
