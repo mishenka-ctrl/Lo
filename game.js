@@ -5,7 +5,7 @@ const overlay = document.querySelector("#overlay");
 const hotbar = document.querySelector("#hotbar");
 const statusLine = document.querySelector("#status");
 
-const WORLD_SIZE = 32;
+const WORLD_SIZE = 28;
 const MAX_HEIGHT = 10;
 const REACH = 7;
 const PLAYER_HEIGHT = 1.75;
@@ -28,8 +28,8 @@ scene.background = new THREE.Color(0x83c5ff);
 scene.fog = new THREE.Fog(0x83c5ff, 45, 92);
 
 const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.05, 140);
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -37,7 +37,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const sun = new THREE.DirectionalLight(0xfff0c4, 2.4);
 sun.position.set(18, 34, 14);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.camera.left = -42;
 sun.shadow.camera.right = 42;
 sun.shadow.camera.top = 42;
@@ -56,7 +56,7 @@ const playerBox = new THREE.Box3();
 const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
 const world = new Map();
 const blockMeshes = new Map();
-const collidableBoxes = new Map();
+const targetMeshes = [];
 const keys = new Set();
 const velocity = new THREE.Vector3();
 const player = {
@@ -70,12 +70,25 @@ let selectedBlock = 0;
 let highlight;
 let lastTime = performance.now();
 
+const neighborOffsets = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
 function blockKey(x, y, z) {
   return `${x},${y},${z}`;
 }
 
 function unpackKey(key) {
   return key.split(",").map(Number);
+}
+
+function isOccupied(x, y, z) {
+  return world.has(blockKey(x, y, z));
 }
 
 function createMaterial(block) {
@@ -95,9 +108,18 @@ function terrainHeight(x, z) {
   return Math.max(2, Math.min(MAX_HEIGHT, Math.round(5 + rolling + hills)));
 }
 
-function addBlock(x, y, z, typeIndex = 0) {
+function setBlockRaw(x, y, z, typeIndex = 0) {
   const key = blockKey(x, y, z);
   if (world.has(key)) return;
+  world.set(key, typeIndex);
+}
+
+function isBlockVisible(x, y, z) {
+  return neighborOffsets.some(([offsetX, offsetY, offsetZ]) => !isOccupied(x + offsetX, y + offsetY, z + offsetZ));
+}
+
+function createBlockMesh(key, typeIndex) {
+  const [x, y, z] = unpackKey(key);
 
   const mesh = new THREE.Mesh(blockGeometry, materials[typeIndex]);
   mesh.position.set(x, y, z);
@@ -105,30 +127,74 @@ function addBlock(x, y, z, typeIndex = 0) {
   mesh.receiveShadow = true;
   mesh.userData.key = key;
   mesh.userData.typeIndex = typeIndex;
-  world.set(key, typeIndex);
   blockMeshes.set(key, mesh);
-  collidableBoxes.set(key, new THREE.Box3().setFromObject(mesh));
+  targetMeshes.push(mesh);
   scene.add(mesh);
 }
 
-function removeBlock(key) {
+function removeBlockMesh(key) {
   const mesh = blockMeshes.get(key);
   if (!mesh) return;
   scene.remove(mesh);
   blockMeshes.delete(key);
-  collidableBoxes.delete(key);
+  const index = targetMeshes.indexOf(mesh);
+  if (index !== -1) targetMeshes.splice(index, 1);
+}
+
+function updateBlockMesh(x, y, z) {
+  const key = blockKey(x, y, z);
+  const typeIndex = world.get(key);
+  if (typeIndex === undefined || !isBlockVisible(x, y, z)) {
+    removeBlockMesh(key);
+    return;
+  }
+
+  const mesh = blockMeshes.get(key);
+  if (mesh) {
+    mesh.material = materials[typeIndex];
+    mesh.userData.typeIndex = typeIndex;
+    return;
+  }
+
+  createBlockMesh(key, typeIndex);
+}
+
+function updateBlockAndNeighbors(x, y, z) {
+  updateBlockMesh(x, y, z);
+  neighborOffsets.forEach(([offsetX, offsetY, offsetZ]) => updateBlockMesh(x + offsetX, y + offsetY, z + offsetZ));
+}
+
+function rebuildVisibleMeshes() {
+  [...blockMeshes.keys()].forEach(removeBlockMesh);
+  for (const key of world.keys()) {
+    const [x, y, z] = unpackKey(key);
+    updateBlockMesh(x, y, z);
+  }
+}
+
+function addBlock(x, y, z, typeIndex = 0) {
+  const key = blockKey(x, y, z);
+  if (world.has(key)) return;
+  world.set(key, typeIndex);
+  updateBlockAndNeighbors(x, y, z);
+}
+
+function removeBlock(key) {
+  const [x, y, z] = unpackKey(key);
   world.delete(key);
+  updateBlockAndNeighbors(x, y, z);
 }
 
 function buildWorld() {
-  [...blockMeshes.keys()].forEach(removeBlock);
+  [...blockMeshes.keys()].forEach(removeBlockMesh);
+  world.clear();
 
   for (let x = -WORLD_SIZE / 2; x < WORLD_SIZE / 2; x += 1) {
     for (let z = -WORLD_SIZE / 2; z < WORLD_SIZE / 2; z += 1) {
       const height = terrainHeight(x, z);
       for (let y = 0; y <= height; y += 1) {
         const type = y === height ? 0 : y > height - 3 ? 1 : 2;
-        addBlock(x, y, z, type);
+        setBlockRaw(x, y, z, type);
       }
     }
   }
@@ -137,16 +203,17 @@ function buildWorld() {
     const x = Math.floor(Math.sin(i * 9.7) * 13);
     const z = Math.floor(Math.cos(i * 5.3) * 13);
     const y = terrainHeight(x, z) + 1;
-    addBlock(x, y, z, 3);
-    addBlock(x, y + 1, z, 3);
-    addBlock(x, y + 2, z, 3);
-    addBlock(x + 1, y + 3, z, 0);
-    addBlock(x - 1, y + 3, z, 0);
-    addBlock(x, y + 3, z + 1, 0);
-    addBlock(x, y + 3, z - 1, 0);
-    addBlock(x, y + 4, z, 0);
+    setBlockRaw(x, y, z, 3);
+    setBlockRaw(x, y + 1, z, 3);
+    setBlockRaw(x, y + 2, z, 3);
+    setBlockRaw(x + 1, y + 3, z, 0);
+    setBlockRaw(x - 1, y + 3, z, 0);
+    setBlockRaw(x, y + 3, z + 1, 0);
+    setBlockRaw(x, y + 3, z - 1, 0);
+    setBlockRaw(x, y + 4, z, 0);
   }
 
+  rebuildVisibleMeshes();
   player.position.set(0, terrainHeight(0, 0) + PLAYER_HEIGHT + 2, 0);
   velocity.set(0, 0, 0);
 }
@@ -199,9 +266,24 @@ function updatePlayerBox(position = player.position) {
 
 function intersectsWorld(position) {
   updatePlayerBox(position);
-  for (const box of collidableBoxes.values()) {
-    if (playerBox.intersectsBox(box)) return true;
+  const minX = Math.floor(playerBox.min.x - 0.5);
+  const maxX = Math.floor(playerBox.max.x + 0.5);
+  const minY = Math.floor(playerBox.min.y - 0.5);
+  const maxY = Math.floor(playerBox.max.y + 0.5);
+  const minZ = Math.floor(playerBox.min.z - 0.5);
+  const maxZ = Math.floor(playerBox.max.z + 0.5);
+
+  for (let x = minX; x <= maxX; x += 1) {
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let z = minZ; z <= maxZ; z += 1) {
+        if (!isOccupied(x, y, z)) continue;
+        tempBox.min.set(x - 0.5, y - 0.5, z - 0.5);
+        tempBox.max.set(x + 0.5, y + 0.5, z + 0.5);
+        if (playerBox.intersectsBox(tempBox)) return true;
+      }
+    }
   }
+
   return false;
 }
 
@@ -248,7 +330,7 @@ function updateMovement(delta) {
 
 function getTarget() {
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects([...blockMeshes.values()], false);
+  const hits = raycaster.intersectObjects(targetMeshes, false);
   return hits[0] ?? null;
 }
 

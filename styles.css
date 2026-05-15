@@ -34,8 +34,10 @@ body {
 #overlay {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-content: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 18px;
   padding: 28px;
   text-align: center;
@@ -45,6 +47,7 @@ body {
   transition:
     opacity 180ms ease,
     visibility 180ms ease;
+  cursor: pointer;
 }
 
 #overlay.hidden {
@@ -82,7 +85,6 @@ p {
   border: 2px solid rgb(255 255 255 / 20%);
   background: rgb(4 10 15 / 52%);
   box-shadow: 0 8px 26px rgb(0 0 0 / 18%);
-  backdrop-filter: blur(9px);
 }
 
 .controls span {
