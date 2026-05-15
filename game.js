@@ -357,6 +357,10 @@ canvas.addEventListener("click", () => {
   if (document.pointerLockElement !== canvas) lockPointer();
 });
 
+overlay.addEventListener("click", () => {
+  if (document.pointerLockElement !== canvas) lockPointer();
+});
+
 document.addEventListener("mousedown", (event) => {
   if (document.pointerLockElement !== canvas) return;
   if (event.button === 0) breakTarget();
